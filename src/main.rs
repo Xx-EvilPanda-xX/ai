@@ -1,4 +1,5 @@
 use std::os::unix::fs::FileExt;
+use rand::Rng;
 use network::Network;
 
 mod function;
@@ -17,17 +18,29 @@ fn main() {
     //     image.save(format!("data{}.png", i).as_str()).expect("Failed to save training image");
     // }
 
-    let mut network = Network::new(vec![(IMG_WIDTH * IMG_HEIGHT) as usize, 30, 20, 10], true);
-    let input = vec_from_train_image(34001);
-    let mut out = vec![0.0; 10];
-    network.compute(&input, &mut out);
-    println!("{:?}", out);
-    let ideal = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0];
+    let mut rng = rand::thread_rng();
+    let mut network = Network::new(vec![1, 20, 20, 1], true);
 
-    let now = std::time::Instant::now();
-    println!("cost function (.back_propagate): {}", network.back_propagate(&input, &ideal));
-    println!("Time elapsed: {}", std::time::Instant::now().duration_since(now).as_secs_f64());
-    println!("cost function: {}", out.iter().zip(ideal.iter()).map(|(o, i)| o - i).sum::<f64>());
+    // let input = vec_from_train_image(34001);
+
+    for _ in 0..100 {
+        let mut sum_costs = 0.0;
+
+        for i in 1..100 {
+            let input = [rng.gen_range(0.0..(100.0 * std::f64::consts::PI))];
+            let ideal = [(input[0] / 100.0).sin() * 100.0];
+            let mut out = vec![0.0; 1];
+            network.compute(&input, &mut out);
+            let cost = network.back_propagate(&input, &ideal);
+            sum_costs += cost;
+            let average_cost = sum_costs / i as f64;
+            println!("propagate! cost = {cost}, out = {out:?}, input = {input:?}, ideal = {ideal:?}, average cost = {average_cost}");
+        }
+    }
+
+    let mut out = vec![0.0; 1];
+    network.compute(&[0.0], &mut out);
+    println!("out: {:?}", out);
 
     let image = image_from_set(34001);
     image.save("34001.png").expect("Failed to save image");

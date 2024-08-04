@@ -40,14 +40,9 @@ impl Symbol {
                             }
                         }
                         Function::Inv(next) => {
-                            let val1 = next.to_closure()(inputs);
-                            let val2 = 1.0 / val1;
-                            if val2.is_infinite() {
-                                // arbitary, works ig?
-                                100000.0
-                            } else {
-                                val2
-                            }
+                            let val = 1.0 / next.to_closure()(inputs);
+                            // arbitrary, works ig?
+                            if val.is_infinite() { 100000.0 } else { val }
                         }
                         Function::Const(value) => *value,
                     }

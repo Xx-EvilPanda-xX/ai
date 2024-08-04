@@ -4,7 +4,6 @@ use crate::function::{Symbol, Function, Variable};
 
 #[derive(Clone, Debug)]
 pub struct Network {
-    // input: IOLayer,
     hidden: Vec<Layer>,
     dims: Vec<usize>,
 }
@@ -19,11 +18,6 @@ struct Layer {
     num_weights: usize,
     num_biases: usize,
 }
-
-// Input layer and output layer only
-// struct IOLayer {
-//     nodes: Vec<f64>
-// }
 
 const DEFAULT_WEIGHT: f64 = 1.0;
 const DEFAULT_BIAS: f64 = 0.0;
@@ -68,7 +62,7 @@ impl Network {
                 }
                 increment(&mut new.hidden[i].bias_indices);
                 new.hidden[i].num_biases += 1;
-    
+
                 new.hidden[i].weights.push(Vec::new());
                 new.hidden[i].weight_indices.push(Vec::new());
 
@@ -88,6 +82,14 @@ impl Network {
         new
     }
 
+    pub fn get_weights(&self, layer: usize) -> &Vec<Vec<f64>> {
+        &self.hidden[layer].weights
+    }
+
+    pub fn get_biases(&self, layer: usize) -> &[f64] {
+        &self.hidden[layer].biases
+    }
+
     pub fn compute(&self, input: &[f64], output: &mut [f64]) {
         assert_eq!(input.len(), self.dims[0]);
         assert_eq!(output.len(), self.dims[self.dims.len() - 1]);
@@ -100,7 +102,7 @@ impl Network {
                 for (j, weight) in node_weights.iter().enumerate() {
                     working[i] += last[j] * weight;
                 }
-                
+
                 // add bias/apply activation function
                 if layer_idx != self.hidden.len() - 1 {
                     working[i] = sig(working[i] + node_bias);
@@ -108,7 +110,7 @@ impl Network {
                     working[i] += node_bias;
                 }
             }
-            
+
             std::mem::swap(&mut working, &mut last);
 
             if layer_idx < self.dims.len() - 2 {
@@ -140,75 +142,75 @@ impl Network {
     }
 
     pub fn back_propagate(&mut self, input: &[f64], ideal: &[f64]) -> f64 {
-        let function_input = self.gen_derivative_input();
-    
+        const LEARNING_RATE: f64 = 0.006;
+        let mut function_input = self.gen_derivative_input();
+
         let cost = self.cost(input, ideal);
         let cost_closure = cost.to_closure();
-        let y = cost_closure(&function_input);
-
-        let copy = self.clone();
 
         // back propagate
         for layer in self.hidden.iter_mut() {
+            // weights
             for (weight_node, weight_index_node) in layer.weights.iter_mut().zip(layer.weight_indices.iter()) {
                 for (weight, weight_index) in weight_node.iter_mut().zip(weight_index_node.iter()) {
+                    // partial derivative of cost function with respect to current weight
                     let derivative = cost.derivative(*weight_index);
                     let derivative_closure = derivative.to_closure();
-                    let d_y = derivative_closure(&function_input);
 
-                    *weight -= d_y / y;
+                    let d_y = derivative_closure(&function_input);
+                    let y = cost_closure(&function_input);
+
+                    if y == 0.0 {
+                        continue;
+                    }
+
+                    // learning rate, proportional to cost
+                    let learning_rate = y * LEARNING_RATE;
+
+                    // shift weight appropriately with the help of newtons method
+                    let change = learning_rate * (d_y / y);
+
+                    function_input[*weight_index] -= change;
+                    if cost_closure(&function_input) > y {
+                        function_input[*weight_index] += change;
+                    } else {
+                        *weight -= change;
+                    }
                 }
             }
 
+            // biases
             for (bias, bias_index) in layer.biases.iter_mut().zip(layer.bias_indices.iter()) {
+                // partial derivative of cost function with respect to current bias
                 let derivative = cost.derivative(*bias_index);
                 let derivative_closure = derivative.to_closure();
-                let d_y = derivative_closure(&function_input);
 
-                *bias -= d_y / y;
+                let d_y = derivative_closure(&function_input);
+                let y = cost_closure(&function_input);
+
+                if y == 0.0 {
+                    continue;
+                }
+
+                // learning rate, proportional to cost
+                let learning_rate = y * LEARNING_RATE;
+
+                // shift bias appropriately with the help of newtons method
+                let change = learning_rate * (d_y / y);
+
+                function_input[*bias_index] -= change;
+                if cost_closure(&function_input) > y {
+                    function_input[*bias_index] += change;
+                } else {
+                    *bias -= change;
+                }
             }
         }
 
         let function_input = self.gen_derivative_input();
 
-        if cost_closure(&function_input) > y {
-            *self = copy;
-        }
-
-        y
+        cost_closure(&function_input)
     }
-
-    // pub fn back_propagate(&mut self, input: &[f64], ideal: &[f64]) -> f64 {
-    //     let flat_weight_indices: Vec<_> = self.hidden.iter().map(|x| x.weight_indices.iter().flatten()).flatten().collect();
-    //     let flat_bias_indices: Vec<_> = self.hidden.iter().map(|x| x.bias_indices.iter()).flatten().collect();
-    //     let flat_weight: Vec<_> = self.hidden.iter().map(|x| x.weights.iter().flatten()).flatten().collect();
-    //     let flat_bias: Vec<_> = self.hidden.iter().map(|x| x.biases.iter()).flatten().collect();
-
-    //     let mut function_input = vec![0.0; flat_weight.len() + flat_bias.len()];
-
-    //     for (i, v) in function_input.iter_mut().enumerate() {
-    //         match flat_weight_indices.iter().position(|p| **p == i) {
-    //             Some(i) => *v = *flat_weight[i],
-    //             None => {
-    //                 match flat_bias_indices.iter().position(|p| **p == i) {
-    //                     Some(i) => *v = *flat_bias[i],
-    //                     None => println!("Error: no such index"),
-    //                 }
-    //             }
-    //         }
-    //     }
-
-    //     let now = std::time::Instant::now();
-    //     let cost = self.cost(input, ideal);
-    //     println!(".cost elapsed: {}", std::time::Instant::now().duration_since(now).as_secs_f64());
-    //     let now = std::time::Instant::now();
-    //     let closure = cost.to_closure();
-    //     println!(".to_closure elapsed: {}", std::time::Instant::now().duration_since(now).as_secs_f64());
-    //     let now = std::time::Instant::now();
-    //     let x = closure(&function_input);
-    //     println!("execution elapsed: {}", std::time::Instant::now().duration_since(now).as_secs_f64());
-    //     x
-    // }
 
     fn node_function(&self, input: &[f64], layer: usize, node: usize, last_layer: bool) -> Symbol {
         // println!("node_function - layer: {}, node: {}", layer, node);

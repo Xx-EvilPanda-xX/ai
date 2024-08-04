@@ -28,8 +28,27 @@ impl Symbol {
                     match f {
                         Function::Add(next) => next.iter().map(|symbol| symbol.to_closure()(inputs)).sum(),
                         Function::Mul(next) => next.0.to_closure()(inputs) * next.1.to_closure()(inputs),
-                        Function::Sig(next) => 1.0 / (1.0 + (-next.to_closure()(inputs)).exp()),
-                        Function::Inv(next) => 1.0 / next.to_closure()(inputs),
+                        Function::Sig(next) => {
+                            let val1 = -next.to_closure()(inputs);
+                            let val2 = 1.0 / (1.0 + (val1).exp());
+                            if val2.is_infinite() {
+                                println!("{val1}");
+                                assert!(false);
+                                22.0
+                            } else {
+                                val2
+                            }
+                        }
+                        Function::Inv(next) => {
+                            let val1 = next.to_closure()(inputs);
+                            let val2 = 1.0 / val1;
+                            if val2.is_infinite() {
+                                // arbitary, works ig?
+                                100000.0
+                            } else {
+                                val2
+                            }
+                        }
                         Function::Const(value) => *value,
                     }
                 }

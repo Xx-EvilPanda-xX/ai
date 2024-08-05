@@ -22,6 +22,31 @@ struct Layer {
     num_biases: usize,
 }
 
+// All nodes of the network given a certain input
+struct NetworkState {
+    layers: Vec<LayerState>
+}
+
+struct LayerState {
+    nodes: Vec<f64>
+}
+
+
+// ID structs, NodeID works for both nodes and biases
+#[derive(Clone, Copy, Debug)]
+struct NodeID {
+    layer: usize,
+    node: usize,
+}
+
+// ALWAYS refers to layer to which the weight in question is incoming
+#[derive(Clone, Copy, Debug)]
+struct WeightID {
+    layer: usize,
+    node: usize,
+    weight: usize,
+}
+
 const DEFAULT_WEIGHT: f64 = 1.0;
 const DEFAULT_BIAS: f64 = 0.0;
 
@@ -106,13 +131,20 @@ impl Network {
     }
 
     pub fn compute(&self, input: &[f64], output: &mut [f64]) {
+        self.compute_internal(input, Some(output), None);
+    }
+
+    fn compute_internal(&self, input: &[f64], output: Option<&mut [f64]>, mut network_state: Option<&mut NetworkState>) {
         assert_eq!(input.len(), self.dims[0]);
-        assert_eq!(output.len(), self.dims[self.dims.len() - 1]);
 
         let mut last = input.to_vec();
         let mut working = vec![0.0; self.dims[1]];
 
         for (layer_idx, layer) in self.hidden.iter().enumerate() {
+            if let Some(ref mut network_state) = network_state {
+                network_state.layers.push(LayerState { nodes: last.clone() });
+            }
+
             for (i, (node_weights, node_bias)) in layer.weights.iter().zip(layer.biases.iter()).enumerate() {
                 for (j, weight) in node_weights.iter().enumerate() {
                     working[i] += last[j] * weight;
@@ -133,7 +165,10 @@ impl Network {
             }
         }
 
-        output.copy_from_slice(&last);
+        if let Some(output) = output {
+            assert_eq!(output.len(), self.dims[self.dims.len() - 1]);
+            output.copy_from_slice(&last);
+        }
     }
 
     fn gen_derivative_input(&self) -> Vec<f64> {
@@ -156,12 +191,54 @@ impl Network {
         function_input
     }
 
-    pub fn back_propagate(&mut self, input: &[f64], ideal: &[f64]) -> f64 {
-        const LEARNING_RATE: f64 = 0.01;
+    fn node_derivative(&self, node_id: NodeID, respect_weight: Option<WeightID>, respect_bias: Option<NodeID>, network_state: &NetworkState) -> f64 {
+        // Must only be with respect to weight OR bias, not both or neither
+        assert!(!(respect_weight.is_some() && respect_bias.is_some()));
+        assert!(!(!respect_weight.is_some() && !respect_bias.is_some()));
+
+        
+
+        todo!()
+    }
+
+    fn fast_cost(network_state: &NetworkState, ideal: &[f64]) -> f64 {
+        let output = &network_state.layers.last().unwrap().nodes;
+        assert_eq!(output.len(), ideal.len());
+
+        output.iter().zip(ideal.iter())
+            .map(|(output, ideal)| (output - ideal) * (output - ideal))
+            .sum::<f64>()
+            .sqrt()
+    }
+
+    fn fast_cost_derivative(&self, network_state: &NetworkState, ideal: &[f64], respect_weight: Option<WeightID>, respect_bias: Option<NodeID>) -> f64 {
+        let output = &network_state.layers.last().unwrap().nodes;
+        assert_eq!(output.len(), ideal.len());
+
+        let a = 0.5 / Self::fast_cost(network_state, ideal).sqrt();
+
+        let b = output.iter().enumerate().zip(ideal.iter())
+            .map(|((i, output), ideal)| {
+                2.0 * (output - ideal) * self.node_derivative(NodeID { layer: self.dims.len() - 1, node: i }, respect_weight, respect_bias, network_state)
+            })
+            .sum::<f64>();
+
+        a * b
+    }
+
+    pub fn back_propagate(&mut self, input: &[f64], ideal: &[f64]) -> (f64, f64) {
+        const LEARNING_RATE: f64 = 0.005;
+
+
+        let mut network_state = NetworkState { layers: Vec::new() };
+        self.compute_internal(input, None, Some(&mut network_state));
+
+
         let mut function_input = self.gen_derivative_input();
 
         let cost = self.cost(input, ideal);
         let cost_closure = cost.to_closure();
+        let prior_cost = cost_closure(&function_input);
 
         // back propagate
         for layer in self.hidden.iter_mut() {
@@ -180,8 +257,7 @@ impl Network {
                     }
 
                     // learning rate, proportional to cost
-                    let learning_rate = y * y * LEARNING_RATE;
-                    // println!("{}", learning_rate);
+                    let learning_rate = y * LEARNING_RATE;
 
                     // shift weight appropriately with the help of newtons method
                     let change = learning_rate * (d_y / y);
@@ -209,7 +285,7 @@ impl Network {
                 }
 
                 // learning rate, proportional to cost
-                let learning_rate = y * y * LEARNING_RATE;
+                let learning_rate = y * LEARNING_RATE;
 
                 // shift bias appropriately with the help of newtons method
                 let change = learning_rate * (d_y / y);
@@ -225,7 +301,7 @@ impl Network {
 
         let function_input = self.gen_derivative_input();
 
-        cost_closure(&function_input)
+        (prior_cost, cost_closure(&function_input))
     }
 
     fn node_function(&self, input: &[f64], layer: usize, node: usize, last_layer: bool) -> Symbol {
@@ -268,13 +344,13 @@ impl Network {
             out_nodes_diff.push(
                 Symbol::Func(Function::Sqrt(Box::new(
                     Symbol::Func(Function::Mul(Box::new((
-                        Symbol::Func(Function::Add( // TODOOOOOO: THIS NOT A PROPER COST FUNCTION. CHANGE TO BE DISTANCE IN HIGH DIMENSIONAL SPACE.
+                        Symbol::Func(Function::Add(
                             vec![
                                 Symbol::Func(Function::Const(-(*node))),
                                 self.node_function(input, self.dims.len() - 1, i, true)
                             ]
                         )),
-                        Symbol::Func(Function::Add( // TODOOOOOO: THIS NOT A PROPER COST FUNCTION. CHANGE TO BE DISTANCE IN HIGH DIMENSIONAL SPACE.
+                        Symbol::Func(Function::Add(
                             vec![
                                 Symbol::Func(Function::Const(-(*node))),
                                 self.node_function(input, self.dims.len() - 1, i, true)

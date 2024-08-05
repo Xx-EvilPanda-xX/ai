@@ -6,6 +6,7 @@ pub enum Function {
     Mul(Box<(Symbol, Symbol)>),
     Sig(Box<Symbol>),
     Inv(Box<Symbol>),
+    Sqrt(Box<Symbol>),
     Const(f64)
 }
 
@@ -44,6 +45,7 @@ impl Symbol {
                             // arbitrary, works ig?
                             if val.is_infinite() { 100000.0 } else { val }
                         }
+                        Function::Sqrt(next) => next.to_closure()(inputs).sqrt(),
                         Function::Const(value) => *value,
                     }
                 }
@@ -104,6 +106,17 @@ impl Symbol {
                                     next.as_ref().clone()
                                 ))))
                             )))
+                        ))))
+                    },
+                    Function::Sqrt(next) => {
+                        Symbol::Func(Function::Mul(Box::new((
+                            next.derivative(respect),
+                            Symbol::Func(Function::Mul(Box::new((
+                                Symbol::Func(Function::Const(0.5)),
+                                Symbol::Func(Function::Inv(Box::new(
+                                    Symbol::Func(Function::Sqrt(next.clone()))
+                                )))
+                            ))))
                         ))))
                     },
                     Function::Const(_) => Symbol::Func(Function::Const(0.0)),

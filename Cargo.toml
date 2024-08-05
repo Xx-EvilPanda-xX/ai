@@ -8,6 +8,8 @@ edition = "2021"
 [dependencies]
 image = "0.25.1"
 rand = "0.8.5"
+savefile = "0.17.7"
+savefile-derive = "0.17.7"
 
 [profile.release]
 debug = true

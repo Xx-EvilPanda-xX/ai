@@ -1,15 +1,18 @@
 use rand::Rng;
 use std::ops::Range;
+use std::{fs::File, io::Write};
 use crate::function::{Symbol, Function, Variable};
+use savefile::prelude::*;
+use savefile_derive::Savefile;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Savefile)]
 pub struct Network {
     hidden: Vec<Layer>,
     dims: Vec<usize>,
 }
 
 // Outer vector - nodes, inner vector - incoming weights/biases
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Savefile)]
 struct Layer {
     weights: Vec<Vec<f64>>,
     biases: Vec<f64>,
@@ -82,12 +85,24 @@ impl Network {
         new
     }
 
+    pub fn new_from_save(path: &str) -> Self {
+        load_file(path, 0).expect("Failed to load network")
+    }
+
     pub fn get_weights(&self, layer: usize) -> &Vec<Vec<f64>> {
         &self.hidden[layer].weights
     }
 
     pub fn get_biases(&self, layer: usize) -> &[f64] {
         &self.hidden[layer].biases
+    }
+
+    pub fn get_dims(&self) -> &[usize] {
+        &self.dims
+    }
+
+    pub fn save(&self, path: &str) {
+        save_file(path, 0, self).expect("Failed to save network");
     }
 
     pub fn compute(&self, input: &[f64], output: &mut [f64]) {
@@ -142,7 +157,7 @@ impl Network {
     }
 
     pub fn back_propagate(&mut self, input: &[f64], ideal: &[f64]) -> f64 {
-        const LEARNING_RATE: f64 = 0.006;
+        const LEARNING_RATE: f64 = 0.01;
         let mut function_input = self.gen_derivative_input();
 
         let cost = self.cost(input, ideal);
@@ -165,7 +180,8 @@ impl Network {
                     }
 
                     // learning rate, proportional to cost
-                    let learning_rate = y * LEARNING_RATE;
+                    let learning_rate = y * y * LEARNING_RATE;
+                    // println!("{}", learning_rate);
 
                     // shift weight appropriately with the help of newtons method
                     let change = learning_rate * (d_y / y);
@@ -193,7 +209,7 @@ impl Network {
                 }
 
                 // learning rate, proportional to cost
-                let learning_rate = y * LEARNING_RATE;
+                let learning_rate = y * y * LEARNING_RATE;
 
                 // shift bias appropriately with the help of newtons method
                 let change = learning_rate * (d_y / y);
@@ -250,20 +266,22 @@ impl Network {
 
         for (i, node) in ideal.iter().enumerate() {
             out_nodes_diff.push(
-                Symbol::Func(Function::Mul(Box::new((
-                    Symbol::Func(Function::Add( // TODOOOOOO: THIS NOT A PROPER COST FUNCTION. CHANGE TO BE DISTANCE IN HIGH DIMENSIONAL SPACE.
-                        vec![
-                            Symbol::Func(Function::Const(-(*node))),
-                            self.node_function(input, self.dims.len() - 1, i, true)
-                        ]
-                    )),
-                    Symbol::Func(Function::Add( // TODOOOOOO: THIS NOT A PROPER COST FUNCTION. CHANGE TO BE DISTANCE IN HIGH DIMENSIONAL SPACE.
-                        vec![
-                            Symbol::Func(Function::Const(-(*node))),
-                            self.node_function(input, self.dims.len() - 1, i, true)
-                        ]
-                    ))
-                ))))
+                Symbol::Func(Function::Sqrt(Box::new(
+                    Symbol::Func(Function::Mul(Box::new((
+                        Symbol::Func(Function::Add( // TODOOOOOO: THIS NOT A PROPER COST FUNCTION. CHANGE TO BE DISTANCE IN HIGH DIMENSIONAL SPACE.
+                            vec![
+                                Symbol::Func(Function::Const(-(*node))),
+                                self.node_function(input, self.dims.len() - 1, i, true)
+                            ]
+                        )),
+                        Symbol::Func(Function::Add( // TODOOOOOO: THIS NOT A PROPER COST FUNCTION. CHANGE TO BE DISTANCE IN HIGH DIMENSIONAL SPACE.
+                            vec![
+                                Symbol::Func(Function::Const(-(*node))),
+                                self.node_function(input, self.dims.len() - 1, i, true)
+                            ]
+                        ))
+                    ))))
+                )))
             )
         }
 
@@ -273,4 +291,31 @@ impl Network {
 
 fn sig(x: f64) -> f64 {
     1.0 / (1.0 + (-x).exp())
+}
+
+// text-based network saving
+pub fn save_network_text(path: &str, network: &Network) -> std::io::Result<()> {
+    let mut file = File::create(path)?;
+
+    file.write_fmt(format_args!("["))?;
+    for layer in network.dims.iter().take(network.dims.len() - 1) {
+        file.write_fmt(format_args!("{}, ", layer))?;
+    }
+    file.write_fmt(format_args!("{}]\n\n", network.dims[network.dims.len() - 1]))?;
+
+    for (i, hidden) in network.hidden.iter().enumerate() {
+        file.write_fmt(format_args!("Layer {}:\n", i + 2))?;
+
+        for (i, (weights, bias)) in hidden.weights.iter().zip(hidden.biases.iter()).enumerate() {
+            file.write_fmt(format_args!("    Node {}:\n", i + 1))?;
+            file.write_fmt(format_args!("        Bias:\n            {}\n", bias))?;
+            file.write_fmt(format_args!("        Incoming weights:\n"))?;
+            for weight in weights {
+                file.write_fmt(format_args!("            {}\n", weight))?;
+            }
+        }
+        file.write_fmt(format_args!("\n"))?;
+    }
+
+    Ok(())
 }

@@ -51,7 +51,9 @@ fn main() {
 
                 sum_costs += pre_cost;
                 let average_cost = sum_costs / i as f64;
-                println!("propagate! pre-cost = {pre_cost}, post_cost = {post_cost}, out = {out:?}, input = {input:?}, ideal = {ideal:?}, average cost = {average_cost}");
+                if i % 100 == 0 {
+                    println!("propagate! pre-cost = {pre_cost}, post_cost = {post_cost}, out = {out:?}, input = {input:?}, ideal = {ideal:?}, average cost = {average_cost}");
+                }
             }
         }
 

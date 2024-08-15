@@ -165,6 +165,10 @@ impl Network {
             }
         }
 
+        if let Some(ref mut network_state) = network_state {
+            network_state.layers.push(LayerState { nodes: last.clone() });
+        }
+
         if let Some(output) = output {
             assert_eq!(output.len(), self.dims[self.dims.len() - 1]);
             output.copy_from_slice(&last);
@@ -196,9 +200,75 @@ impl Network {
         assert!(!(respect_weight.is_some() && respect_bias.is_some()));
         assert!(!(!respect_weight.is_some() && !respect_bias.is_some()));
 
-        
+        let no_activation_node = |layer: usize, node: usize| {
+            // input layer never has activation function applied
+            if layer == 0 {
+                return network_state.layers[0].nodes[node];
+            }
 
-        todo!()
+            // layer - 1 for second arg because first weights are tied to second layer
+            assert_eq!(network_state.layers[layer - 1].nodes.len(), self.hidden[layer - 1].weights[node].len());
+
+            let sum: f64 = network_state.layers[layer - 1].nodes.iter()
+                .zip(self.hidden[layer - 1].weights[node].iter())
+                .map(|(node, weight)| node * weight)
+                .sum();
+
+            sum + self.hidden[layer - 1].biases[node]
+        };
+
+        fn derivative_sig(x: f64) -> f64 {
+            let a = (-x).exp();
+            a / ((1.0 + a) * (1.0 + a))
+        }
+
+        // Layer and node index stored in NodeID for both weight and bias, weight index in option for weight only
+        let (respect, weight_option) = if let Some(respect) = respect_weight {
+            (NodeID { layer: respect.layer, node: respect.node }, Some(respect.weight))
+        } else {
+            (respect_bias.unwrap(), None)
+        };
+
+        match node_id.layer as i64 - respect.layer as i64 {
+            // weight is 2+ layers upstream from node in question
+            2.. => {
+                let a = derivative_sig(no_activation_node(node_id.layer, node_id.node));
+                // sum of derivatives of previous nodes times their weights
+                let b: f64 = self.hidden[node_id.layer - 1].weights[node_id.node].iter().enumerate()
+                    .map(|(index, weight)| {
+                        self.node_derivative(NodeID { layer: node_id.layer - 1, node: index }, respect_weight, respect_bias, network_state) * weight
+                    })
+                    .sum();
+
+                a * b
+            },
+            // weight is 1 layer upstream from node in question
+            1 => {
+                let a = derivative_sig(no_activation_node(node_id.layer, node_id.node));
+                // derivative of node to which the weight in respect is incoming times the connecting weight to the node in question
+                let b = self.node_derivative(NodeID { layer: node_id.layer - 1, node: respect.node }, respect_weight, respect_bias, network_state) * self.hidden[node_id.layer - 1].weights[node_id.node][respect.node];
+
+                a * b
+            },
+            // weight is in same layer as node in question
+            0 => {
+                if node_id.node == respect.node {
+                    let a = derivative_sig(no_activation_node(node_id.layer, node_id.node));
+
+                    let b = if let Some(weight_idx) = weight_option {
+                        network_state.layers[node_id.layer - 1].nodes[weight_idx]
+                    } else {
+                        1.0
+                    };
+
+                    a * b
+                } else {
+                    0.0
+                }
+            },
+            // weight is downstream from node in question
+            _ => 0.0
+        }
     }
 
     fn fast_cost(network_state: &NetworkState, ideal: &[f64]) -> f64 {
@@ -215,7 +285,7 @@ impl Network {
         let output = &network_state.layers.last().unwrap().nodes;
         assert_eq!(output.len(), ideal.len());
 
-        let a = 0.5 / Self::fast_cost(network_state, ideal).sqrt();
+        let a = 0.5 / Self::fast_cost(network_state, ideal);
 
         let b = output.iter().enumerate().zip(ideal.iter())
             .map(|((i, output), ideal)| {
@@ -227,30 +297,35 @@ impl Network {
     }
 
     pub fn back_propagate(&mut self, input: &[f64], ideal: &[f64]) -> (f64, f64) {
-        const LEARNING_RATE: f64 = 0.005;
-
+        const LEARNING_RATE: f64 = 1.0;
 
         let mut network_state = NetworkState { layers: Vec::new() };
         self.compute_internal(input, None, Some(&mut network_state));
 
 
-        let mut function_input = self.gen_derivative_input();
+        // let mut function_input = self.gen_derivative_input();
 
-        let cost = self.cost(input, ideal);
-        let cost_closure = cost.to_closure();
-        let prior_cost = cost_closure(&function_input);
+        // let cost = self.cost(input, ideal);
+        // let cost_closure = cost.to_closure();
+        // let prior_cost = cost_closure(&function_input);
+        let prior_cost = Self::fast_cost(&network_state, ideal);
 
         // back propagate
-        for layer in self.hidden.iter_mut() {
+        for layer in 0..self.hidden.iter().len() {
             // weights
-            for (weight_node, weight_index_node) in layer.weights.iter_mut().zip(layer.weight_indices.iter()) {
-                for (weight, weight_index) in weight_node.iter_mut().zip(weight_index_node.iter()) {
+            for node in 0..self.hidden[layer].weights.len() {
+                for weight in 0..self.hidden[layer].weights[node].len() {
                     // partial derivative of cost function with respect to current weight
-                    let derivative = cost.derivative(*weight_index);
-                    let derivative_closure = derivative.to_closure();
+                    // let derivative = cost.derivative(*weight_index);
 
-                    let d_y = derivative_closure(&function_input);
-                    let y = cost_closure(&function_input);
+                    // layer + 1 because first layer of weights informs second layer of nodes
+                    let derivative = self.fast_cost_derivative(&network_state, ideal, Some(WeightID { layer: layer + 1, node, weight }), None);
+                    // let derivative_closure = derivative.to_closure();
+
+                    // let d_y = derivative_closure(&function_input);
+                    let d_y = derivative;
+                    // let y = cost_closure(&function_input);
+                    let y = Self::fast_cost(&network_state, ideal);
 
                     if y == 0.0 {
                         continue;
@@ -262,23 +337,35 @@ impl Network {
                     // shift weight appropriately with the help of newtons method
                     let change = learning_rate * (d_y / y);
 
-                    function_input[*weight_index] -= change;
-                    if cost_closure(&function_input) > y {
-                        function_input[*weight_index] += change;
-                    } else {
-                        *weight -= change;
-                    }
+                    // println!("{}, {}, {}", d_y, y, change);
+
+                    // function_input[*weight_index] -= change;
+                    // if cost_closure(&function_input) > y {
+                    //     function_input[*weight_index] += change;
+                    // } else {
+                    //     *weight -= change;
+                    // }
+
+                    self.hidden[layer].weights[node][weight] -= change;
+                    // self.compute_internal(input, None, Some(&mut network_state));
+                    // if Self::fast_cost(&network_state, ideal) > y {
+                    //     self.hidden[layer].weights[node][weight] += change;
+                    //     self.compute_internal(input, None, Some(&mut network_state));
+                    // }
                 }
             }
 
             // biases
-            for (bias, bias_index) in layer.biases.iter_mut().zip(layer.bias_indices.iter()) {
+            for node in 0..self.hidden[layer].biases.len() {
                 // partial derivative of cost function with respect to current bias
-                let derivative = cost.derivative(*bias_index);
-                let derivative_closure = derivative.to_closure();
+                // let derivative = cost.derivative(*bias_index);
+                let derivative = self.fast_cost_derivative(&network_state, ideal, None, Some(NodeID { layer: layer + 1, node }));
+                // let derivative_closure = derivative.to_closure();
 
-                let d_y = derivative_closure(&function_input);
-                let y = cost_closure(&function_input);
+                // let d_y = derivative_closure(&function_input);
+                let d_y = derivative;
+                // let y = cost_closure(&function_input);
+                let y = Self::fast_cost(&network_state, ideal);
 
                 if y == 0.0 {
                     continue;
@@ -290,18 +377,26 @@ impl Network {
                 // shift bias appropriately with the help of newtons method
                 let change = learning_rate * (d_y / y);
 
-                function_input[*bias_index] -= change;
-                if cost_closure(&function_input) > y {
-                    function_input[*bias_index] += change;
-                } else {
-                    *bias -= change;
-                }
+                // function_input[*bias_index] -= change;
+                // if cost_closure(&function_input) > y {
+                //     function_input[*bias_index] += change;
+                // } else {
+                //     *bias -= change;
+                // }
+
+                self.hidden[layer].biases[node] -= change;
+                // self.compute_internal(input, None, Some(&mut network_state));
+                // if Self::fast_cost(&network_state, ideal) > y {
+                //     self.hidden[layer].biases[node] += change;
+                //     self.compute_internal(input, None, Some(&mut network_state));
+                // }
             }
         }
 
-        let function_input = self.gen_derivative_input();
+        // let function_input = self.gen_derivative_input();
+        self.compute_internal(input, None, Some(&mut network_state));
 
-        (prior_cost, cost_closure(&function_input))
+        (prior_cost, Self::fast_cost(&network_state, ideal))
     }
 
     fn node_function(&self, input: &[f64], layer: usize, node: usize, last_layer: bool) -> Symbol {

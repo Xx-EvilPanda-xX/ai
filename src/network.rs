@@ -297,7 +297,7 @@ impl Network {
     }
 
     pub fn back_propagate(&mut self, input: &[f64], ideal: &[f64]) -> (f64, f64) {
-        const LEARNING_RATE: f64 = 1.0;
+        const LEARNING_RATE: f64 = 0.005;
 
         let mut network_state = NetworkState { layers: Vec::new() };
         self.compute_internal(input, None, Some(&mut network_state));
@@ -312,6 +312,8 @@ impl Network {
 
         // back propagate
         for layer in 0..self.hidden.iter().len() {
+            let mut no_change = false;
+
             // weights
             for node in 0..self.hidden[layer].weights.len() {
                 for weight in 0..self.hidden[layer].weights[node].len() {
@@ -319,6 +321,12 @@ impl Network {
                     // let derivative = cost.derivative(*weight_index);
 
                     // layer + 1 because first layer of weights informs second layer of nodes
+                    if no_change {
+                        no_change = false
+                    } else {
+                        self.compute_internal(input, None, Some(&mut network_state));
+                    }
+
                     let derivative = self.fast_cost_derivative(&network_state, ideal, Some(WeightID { layer: layer + 1, node, weight }), None);
                     // let derivative_closure = derivative.to_closure();
 
@@ -347,11 +355,11 @@ impl Network {
                     // }
 
                     self.hidden[layer].weights[node][weight] -= change;
-                    // self.compute_internal(input, None, Some(&mut network_state));
-                    // if Self::fast_cost(&network_state, ideal) > y {
-                    //     self.hidden[layer].weights[node][weight] += change;
-                    //     self.compute_internal(input, None, Some(&mut network_state));
-                    // }
+                    self.compute_internal(input, None, Some(&mut network_state));
+                    if Self::fast_cost(&network_state, ideal) > y {
+                        self.hidden[layer].weights[node][weight] += change;
+                        no_change = true;
+                    }
                 }
             }
 
@@ -359,6 +367,11 @@ impl Network {
             for node in 0..self.hidden[layer].biases.len() {
                 // partial derivative of cost function with respect to current bias
                 // let derivative = cost.derivative(*bias_index);
+                if no_change {
+                    no_change = false
+                } else {
+                    self.compute_internal(input, None, Some(&mut network_state));
+                }
                 let derivative = self.fast_cost_derivative(&network_state, ideal, None, Some(NodeID { layer: layer + 1, node }));
                 // let derivative_closure = derivative.to_closure();
 
@@ -385,11 +398,12 @@ impl Network {
                 // }
 
                 self.hidden[layer].biases[node] -= change;
-                // self.compute_internal(input, None, Some(&mut network_state));
-                // if Self::fast_cost(&network_state, ideal) > y {
-                //     self.hidden[layer].biases[node] += change;
-                //     self.compute_internal(input, None, Some(&mut network_state));
-                // }
+                self.compute_internal(input, None, Some(&mut network_state));
+                if Self::fast_cost(&network_state, ideal) > y {
+                    self.hidden[layer].biases[node] += change;
+                    self.compute_internal(input, None, Some(&mut network_state));
+                    no_change = true;
+                }
             }
         }
 
